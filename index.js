@@ -107,16 +107,23 @@ async function connectToWhatsApp() {
             isConnected = false;
             qrCodeData = ''; // Reset QR
             const lastError = lastDisconnect?.error;
+            const statusCode = lastError?.output?.statusCode;
             console.log('Connection closed. Error Details:', lastError);
 
-            const shouldReconnect = lastError?.output?.statusCode !== DisconnectReason.loggedOut;
+            const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
             console.log('Reconnecting...', shouldReconnect);
 
-            if (shouldReconnect) {
+            if (statusCode === DisconnectReason.loggedOut || statusCode === 401 || statusCode === 515) {
+                console.log('Session is invalid or expired. Deleting auth_info_baileys to generate new QR...');
+                try {
+                    fs.rmSync('auth_info_baileys', { recursive: true, force: true });
+                } catch (e) {
+                    console.error('Failed to remove auth directory', e);
+                }
+                setTimeout(connectToWhatsApp, 3000);
+            } else if (shouldReconnect) {
                 // To avoid infinite loops on immediate reconnect
                 setTimeout(connectToWhatsApp, 3000);
-            } else {
-                console.log('You are logged out. Please delete auth_info_baileys directory and scan again.');
             }
         } else if (connection === 'open') {
             isConnected = true;
@@ -144,16 +151,28 @@ async function connectToWhatsApp() {
 
             // Check if the message is the .reveal command
             if (text === '.reveal') {
+                console.log('Detected .reveal command!');
                 // Check if the user is replying to a viewOnce message
                 const contextInfo = msg.message.extendedTextMessage?.contextInfo;
-                if (!contextInfo || !contextInfo.quotedMessage) return;
+                if (!contextInfo || !contextInfo.quotedMessage) {
+                    console.log('No quoted message found in contextInfo');
+                    return;
+                }
 
                 const quotedMsg = contextInfo.quotedMessage;
+                console.log('Quoted message keys:', Object.keys(quotedMsg));
 
                 // Extract the viewOnce content from the quoted message
-                let viewOnceMessage = quotedMsg.viewOnceMessage?.message ||
-                    quotedMsg.viewOnceMessageV2?.message ||
-                    quotedMsg.viewOnceMessageV2Extension?.message;
+                // In quotedMessage, Baileys sometimes strips the outer 'message' wrapper
+                // let's check where the viewOnce inner message is
+                let viewOnceInner = quotedMsg.viewOnceMessage || quotedMsg.viewOnceMessageV2 || quotedMsg.viewOnceMessageV2Extension;
+
+                let viewOnceMessage = viewOnceInner?.message || viewOnceInner;
+
+                if (!viewOnceInner) {
+                    console.log('Quoted message does not appear to be a View Once message.');
+                    return;
+                }
 
                 if (viewOnceMessage) {
                     console.log('Reveal Command Detected on View Once Message!');
