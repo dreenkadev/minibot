@@ -128,71 +128,95 @@ async function connectToWhatsApp() {
     sock.ev.on('messages.upsert', async (m) => {
         try {
             const msg = m.messages[0];
-            if (!msg.message || msg.key.fromMe) return;
+            if (!msg.message) return;
 
-            // Extract the message content which might be viewOnce
-            // View once messages can be encapsulated differently depending on WhatsApp client version
-            let viewOnceMessage = msg.message?.viewOnceMessage?.message ||
-                msg.message?.viewOnceMessageV2?.message ||
-                msg.message?.viewOnceMessageV2Extension?.message;
+            // Get message text
+            const getMessageText = (msg) => {
+                if (!msg.message) return '';
+                if (msg.message.conversation) return msg.message.conversation;
+                if (msg.message.extendedTextMessage) return msg.message.extendedTextMessage.text;
+                if (msg.message.imageMessage?.caption) return msg.message.imageMessage.caption;
+                if (msg.message.videoMessage?.caption) return msg.message.videoMessage.caption;
+                return '';
+            };
 
-            if (viewOnceMessage) {
-                console.log('View Once Message Detected!');
+            const text = getMessageText(msg).trim().toLowerCase();
 
-                // Get the message type (e.g., imageMessage, videoMessage, audioMessage)
-                const msgType = Object.keys(viewOnceMessage)[0];
-                const mediaMsg = viewOnceMessage[msgType];
+            // Check if the message is the .reveal command
+            if (text === '.reveal') {
+                // Check if the user is replying to a viewOnce message
+                const contextInfo = msg.message.extendedTextMessage?.contextInfo;
+                if (!contextInfo || !contextInfo.quotedMessage) return;
 
-                if (msgType === 'imageMessage' || msgType === 'videoMessage' || msgType === 'audioMessage') {
-                    // Download the media stream
-                    const stream = await downloadContentFromMessage(
-                        mediaMsg,
-                        msgType.replace('Message', '')
-                    );
+                const quotedMsg = contextInfo.quotedMessage;
 
-                    let buffer = Buffer.from([]);
-                    for await (const chunk of stream) {
-                        buffer = Buffer.concat([buffer, chunk]);
+                // Extract the viewOnce content from the quoted message
+                let viewOnceMessage = quotedMsg.viewOnceMessage?.message ||
+                    quotedMsg.viewOnceMessageV2?.message ||
+                    quotedMsg.viewOnceMessageV2Extension?.message;
+
+                if (viewOnceMessage) {
+                    console.log('Reveal Command Detected on View Once Message!');
+
+                    // Get the message type (e.g., imageMessage, videoMessage, audioMessage)
+                    const msgType = Object.keys(viewOnceMessage)[0];
+                    const mediaMsg = viewOnceMessage[msgType];
+
+                    if (msgType === 'imageMessage' || msgType === 'videoMessage' || msgType === 'audioMessage') {
+                        // Download the media stream
+                        const stream = await downloadContentFromMessage(
+                            mediaMsg,
+                            msgType.replace('Message', '')
+                        );
+
+                        let buffer = Buffer.from([]);
+                        for await (const chunk of stream) {
+                            buffer = Buffer.concat([buffer, chunk]);
+                        }
+
+                        // Prepare caption
+                        let captionText = `🚫 *REVEALED VIEW ONCE* 🚫\n\n`;
+                        if (mediaMsg.caption) {
+                            captionText += `*Caption:* ${mediaMsg.caption}\n`;
+                        }
+
+                        const mentions = [];
+                        const chatId = msg.key.remoteJid;
+                        const originalSenderJid = contextInfo.participant;
+                        const requesterJid = msg.key.participant || msg.key.remoteJid;
+
+                        mentions.push(originalSenderJid);
+                        mentions.push(requesterJid);
+
+                        captionText += `*Sender:* @${originalSenderJid.split('@')[0]}\n`;
+                        captionText += `*Revealed by:* @${requesterJid.split('@')[0]}\n`;
+
+                        // Define options for resending, quote the original view once message if possible
+                        // Or quote the .reveal command
+                        const options = {
+                            quoted: msg
+                        };
+
+                        // Send the downloaded media back to the chat as normal media
+                        if (msgType === 'imageMessage') {
+                            await sock.sendMessage(chatId, { image: buffer, caption: captionText, mentions: mentions }, options);
+                        } else if (msgType === 'videoMessage') {
+                            await sock.sendMessage(chatId, { video: buffer, caption: captionText, mentions: mentions }, options);
+                        } else if (msgType === 'audioMessage') {
+                            await sock.sendMessage(chatId, {
+                                audio: buffer,
+                                mimetype: mediaMsg.mimetype || 'audio/mp4',
+                                ptt: mediaMsg.ptt || false,
+                                mentions: mentions
+                            }, options);
+                        }
+
+                        console.log('Successfully revealed View Once Media via command.');
+                        return; // Stop further processing for this message
                     }
-
-                    // Prepare caption
-                    let captionText = `🚫 * ANTI VIEW ONCE * 🚫\n\n`;
-                    if (mediaMsg.caption) {
-                        captionText += `* Caption:* ${mediaMsg.caption}\n`;
-                    }
-
-                    const mentions = [];
-                    const fromJid = msg.key.remoteJid;
-                    const senderJid = msg.key.participant || msg.key.remoteJid;
-                    mentions.push(senderJid);
-
-                    captionText += `* From:* @${senderJid.split('@')[0]}\n`;
-
-                    // Define options for resending
-                    const options = {
-                        quoted: msg
-                    };
-
-                    // To resend to the same chat where it was sent:
-                    const chatId = msg.key.remoteJid;
-
-                    // Send the downloaded media back to the chat as normal media
-                    if (msgType === 'imageMessage') {
-                        await sock.sendMessage(chatId, { image: buffer, caption: captionText, mentions: mentions }, options);
-                    } else if (msgType === 'videoMessage') {
-                        await sock.sendMessage(chatId, { video: buffer, caption: captionText, mentions: mentions }, options);
-                    } else if (msgType === 'audioMessage') {
-                        await sock.sendMessage(chatId, {
-                            audio: buffer,
-                            mimetype: mediaMsg.mimetype || 'audio/mp4',
-                            ptt: mediaMsg.ptt || false,
-                            mentions: mentions
-                        }, options);
-                    }
-
-                    console.log('Successfully saved and resent View Once Media.');
                 }
             }
+
         } catch (error) {
             console.error('Error in messages.upsert:', error);
         }
