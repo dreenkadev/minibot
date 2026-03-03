@@ -1,5 +1,1 @@
-node_modules/
-auth_info_baileys/
-.env
-.DS_Store
-*.log
+node_modules/\nauth_info_baileys/\n.env\n.DS_Store\n*.log
