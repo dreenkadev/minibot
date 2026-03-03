@@ -113,7 +113,7 @@ async function connectToWhatsApp() {
             const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
             console.log('Reconnecting...', shouldReconnect);
 
-            if (statusCode === DisconnectReason.loggedOut || statusCode === 401 || statusCode === 515) {
+            if (statusCode === DisconnectReason.loggedOut || statusCode === 401) {
                 console.log('Session is invalid or expired. Deleting auth_info_baileys to generate new QR...');
                 try {
                     fs.rmSync('auth_info_baileys', { recursive: true, force: true });
